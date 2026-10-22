@@ -4,55 +4,61 @@ WebExtension proposal to allow the secure storage of small amounts of data in pl
 
 ## Champions
 
-- Christian R. (1Password)  - [@simpleplaces](https://github.com/simpleplaces/), [email](mailto:smp@pengin.systems)
+- Christian R. (1Password) - [@simpleplaces](https://github.com/simpleplaces/), [email](mailto:smp@pengin.systems)
+- Ben Greenberg (Aglide) - [@nebbles](https://github.com/nebbles/), [email](mailto:github@greenberg.io)
 
 ## Motivation
 
-Extensions such as credential managers, messaging apps, and cryptocurrency wallets handle sensitive user data. Therefore, a common choice is to only persist encrypted versions of the data to places like localStorage and IndexedDB. The decryption keys needed to use this data at runtime are stored only in extension memory, meaning that to access the data after a browser restart, the user must be prompted for whatever the key is derived from, usually a long and hard to type password.
+Extensions such as credential managers, messaging apps, and cryptocurrency wallets handle sensitive user data. Therefore, a common choice is to only persist encrypted versions of the data to places like localStorage, IndexedDB, or a server. The decryption keys needed to use this data at runtime are stored only in extension memory, meaning that to access the data after a browser restart, the user must be prompted for whatever the key is derived from, usually a long and hard to type password.
 
-Users understandably prefer not to type this, so in desktop applications, a common pattern is to store the decryption key in a system store (like macOS keychain). The system can be told to [only reveal the secret after user verification have been performed](https://developer.apple.com/documentation/security/keychain_services/keychain_items/restricting_keychain_item_accessibility?language=objc#2974973), meaning the application can request the secret but access is only granted if the user that stored it is physically present. This pattern is good for users but currently only possible in extensions by communicating with a native application over [Native Messaging](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_messaging). This is because access to both hardware-based key stores and user verification prompts are not exposed by existing web APIs.
+Users understandably prefer not to type this, so in desktop applications, a common pattern is to store the decryption key in a system store (e.g. macOS Keychain or Windows Credential Manager). The system can be told to [only reveal the secret after user verification have been performed](https://developer.apple.com/documentation/security/keychain_services/keychain_items/restricting_keychain_item_accessibility?language=objc#2974973), meaning the application can request the secret but access is only granted if the user that stored it is physically present. This pattern is good for users but currently only possible in extensions by communicating with a native application over [Native Messaging](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Native_messaging) to leverage platform-specific secure storage solutions. This is because access to both hardware-based key stores and user verification prompts are not exposed by existing web APIs.
+
+However, this approach requires users to install a separate native application, which can be a barrier to adoption and adds complexity to the extension's architecture.
+
+In a similar scenario, enterprises often want to use Single Sign-On (SSO) for the managed users in their organisation, rather than a password. This means there is no option for the user to provide a key-derivable password. In this case, device-specific encryption keys must generated after authorisation (e.g. "device approval") and can be used going forwards to decrypt the user's data on-device (in combination with an assertion from an identity provider).
+
+There are other less demanding scenarios, such as storing authentication tokens, that could also benefit from dedicated secure storage.
 
 ## Proposal
 
-We propose a new `browser.secureCache` API that would use platform-dependent APIs for storing sensitive data, when available:
+We propose a new API, `browser.secureCache`, that would use platform-dependent APIs for storing sensitive data, when available:
 
 - macOS/iOS: [Keychain](https://developer.apple.com/documentation/security/keychain_services)
 - Windows: [Trusted Platform Module (TPM)](https://docs.microsoft.com/en-us/windows/security/information-protection/tpm/trusted-platform-module-overview)
 - Android: [Keystore](https://source.android.com/security/keystore)
 - Linux: See FAQ
 
-Data stored using this API must be strongly bound to the extension's identifier (origin) and browser identity to prevent unexpected contexts from obtaining sensitive values. It also will not be persisted in an insecure form persistently (such as on-disk) by explicit browser action.
+Data stored using these APIs must be strongly bound to the extension's identifier (origin) and browser identity to prevent unexpected contexts from obtaining sensitive values. It also will not be persisted in an insecure form persistently (such as on-disk) by explicit browser action.
 
 ### Developer Story
 
-We intend to position the `browser.secureCache` API(s) as the recommended solution for all extension developers who need to store sensitive or secret data. Even in browsers that only implement partial support, its use enhances all users' baseline security. Reasons include:
+We intend to position the Secure Cache API as the recommended solution for all extension developers who need to store sensitive or secret data. Even in browsers that only implement partial support, its use enhances all users' baseline security. Reasons include:
+
 - `storage.session` does not have a specific threat model and treats all values identically regardless of a developer's sensitivity classification.
 - In-memory implementations can implement OS-specific memory hardening protections that extension developers cannot.
 - All extensions using the secure storage APIs will receive costless security and UX enhancements when the underlying browser improves feature support.
 
-In the expected use cases, there are not any downsides to using the API for all secrets management in favor of existing APIs like `storage.session`. Developers offload a large burden of tracking platform-specific security concerns and end users benefit from improvements during their regular browser updates.
-For example, this widely applicable pattern could be encouraged:
-```js
-const storeSecret = (value, mustPersist) => {
-  if (typeof browser.secureCache.getInfo === "function") {
-    const info = browser.secureCache.getInfo();
-    if (mustPersist && !info.hardwareBacked) {
-      throw "persistent storage not available"
-    }
+In the expected use cases, there are not any downsides to using the API for all secrets management as a replacement to existing APIs like `storage.session`. Developers offload a large burden of tracking platform-specific security concerns and end users benefit from improvements during their regular browser updates. For example, this widely applicable pattern could be encouraged:
 
-    browser.secureCache.store(value);
+```js
+function storeSecret(id, value, mustPersist) {
+  const storageIsPersisted =
+    browser.secureCache?.getInfo().persistedStorage === true;
+
+  if (mustPersist && !storageIsPersisted) {
+    throw new Error("Persistent storage not available");
+  }
+
+  if (browser.secureCache) {
+    browser.secureCache.set(id, value);
   } else {
     // Old browser version
-    if (mustPersist) {
-        throw "persistent storage not available"
-    } else {
-      storage.session.set(value)
-    }
+    storage.session.set(value);
   }
-};
+}
 ```
 
-When persistence is required but not available, web extension applications can fall back to the existing mechanisms that exist today for the long-standing limitation. Otherwise, the best location is selected automatically.
+When persistence is required but not available, web extension applications can fall back to the existing mechanisms that they use today for the long-standing limitation. Otherwise, the best location is selected automatically.
 
 ### Threat Model
 
@@ -61,87 +67,223 @@ Data written through `browser.secureCache` should be resistant to malicious thre
 The only spaces trusted to handle the sensitive data are the browser process itself and the operating system/platform the browser is required to trust and interact with. Other processes and other extensions inside the same browser should be assumed dishonest. Once data leaves one of these spaces (for example, to be persisted for an extended period) it must be encrypted (or similar) and tamper-resistant to observers outside the small trusted scope.
 
 These examples, while non-exhaustive, shouldn't allow compromise of stored data:
+
 - A malicious entity scanning the browser profile's persistent data on-disk.
 - A malicious entity installing a malicious browser extension with an identifier spoofed to look like a real extension which has stored data in the past.
 - An extension requesting a secret with the same identifier as one stored by a completely different extension earlier.
 
+### Durability
+
+The `browser.secureCache` API determines it's guarantees for data durability through the `persistentStorage` property.
+
+When the API returns `persistentStorage: true` the browser makes equivalent guarantees to other storage APIs (e.g. `browser.storage.local`) on the durability of data persistence, with the added security guarantees associated with this API.
+
+When the API returns `persistentStorage: false`, no guarantees or promises regarding the duration data stored through it will be persisted. The browser, operating system, or underlying platform hardware may invalidate or destory stored data at any point. As such, extensions utilizing this functionality must always have a suitable fallback method for obtaining the data that was stored or another way to decrypt encrypted data persisted outside of the cache (such as `browser.storage.local`).
+
+Since `browser.secureCache` can communicate its persistence guarantee, browser agents can implement this API quickly by ignoring quirks and other problems of the underlying system the browser executes on, such as TPM resets and hardware component swaps, while remaining specification compliant by returning `persistentStorage: false`.
+
+Important: Values may be removed sooner than durabilty allows if an extension uses the `expiry` option when storing a secret.
+
 ### Fallbacks
 
-In the event the current OS platform doesn't provide key storage APIs which enable greater security or more durable persistence (such as Linux), a browser may opt to only keep data written through `browser.secureCache` inside of its own process memory (wrapped in any OS-specific guards available) until the browser is closed. This provides several compounding advantages over exclusively using platform storage:
+In the event the OS platform doesn't provide key storage APIs which enable greater security or more durable persistence (such as Linux), a browser may opt to only keep data written through `browser.secureCache` inside of its own process memory (wrapped in any OS-specific guards available) until the browser is closed. The browser will communicate this to extensions via the `persistentStorage: false` property.
+
+For developers who need to rely on more durable secure storage, feature discovery of the `browser.secureCache.getInfo().persistentStorage` property will determine whether they have suitable storage available.
+
+This provides several compounding advantages over exclusively using platform storage:
+
 - APIs can be made available over the widest set of platform possible immediately, allowing extensions to adopt it faster without their own detection logic.
 - The new secure cache will still be more durable then an extension's own memory, especially in the context of MV3 extensions which may be restarted at any point.
 - The new APIs will have higher ambient security assurances compared to session storage, which lets `browser.secureCache` always be the go-to recommendation for keys.
 
-### Durability
-
-The `browser.secureCache` API makes no guarantees or promises regarding the duration data stored through it will be persisted. The browser, operating system, or underlying platform hardware may invalidate or destory stored data at any point. As such, extensions utilizing this functionality must always have a suitable
-fallback method for obtaining the data that was stored or another way to decrypt encrypted data persisted outside of the cache (such as `localStorage`).
-
-A secret may be removed sooner then others in the cache implementation depending on how an extension configures such secret during initialization.
-
-By not providing durability guarantees (hence a secure cache, not storage), quirks and other problems of the underlying system the browser executes on, such as TPM resets and hardware component swaps, may simply be easily ignored by browser agents while remaining specification compliant. It also prevents conflicts between web platform stability and the realistic most a specific system can offer at the time.
-
 ### API
 
-**browser.secureCache.getInfo**
+```ts
+interface Browser {
+  secureCache: SecureCache;
+}
 
-First, the `getInfo` function allows an extension to determine what capabilities the current platform implementation its running on provides. This is useful, for example, if the extension only trusts hardware devices but not in-memory storage or want to estimate the durability currently available. It also describes if secrets can be protected by mandatory user verification.
+interface SecureCacheInfo {
+  uvAvailable: boolean;
+  persistentStorage: boolean;
+}
 
-Request:
+interface SecureCache {
+  /**
+   * Gets information about the API implementation.  This can also
+   * be used to determine whether the API is available.
+   */
+  getInfo(): Promise<SecureCacheInfo>;
 
-```
-browser.secureCache.getInfo();
-```
+  /**
+   * Stores a key-value pair in secure cache.
+   *
+   * If the ID has already been used, the value will be overwritten. The ID
+   * must only be unique within the extension.
+   *
+   * If `uvRequired` is set, the user will be required to verify their identity
+   * before get(id) resolves.
+   */
+  set(
+    id: string,
+    value: string,
+    options?: { uvRequired?: boolean }
+  ): Promise<void>;
 
-Response:
+  /**
+   * Retrieves IDs of all stored values.
+   *
+   * If no values are stored, this will return an empty array.
+   */
+  getIds(): Promise<string[]>;
 
-```
-{
-  hardwareBacked: true,
-  systemRestartPersistent: true,
-  uvAvailable: true
+  /**
+   * Retrieves a value from the secure cache. If the value does not exist, this
+   * will reject with an error.  If `uvRequired` was set when the value was
+   * stored, this will prompt the user for verification before returning the
+   * value.
+   *
+   * If the value was stored with `uvRequired: true`, user verification will be
+   * will be applied, regardless of the `options.uvRequired` value.
+   *
+   * If user verification fails, this will reject with an error.
+   */
+  get(
+    id: string,
+    options?: {
+      uvRequired?: boolean;
+      expiry?: Temporal.Duration;
+    }
+  ): Promise<string | undefined>;
+
+  /**
+   * Deletes one or more values from secure cache.
+   *
+   * If the value does not exist, the promise will resolve successfully.
+   */
+  remove(id: string | string[]): Promise<void>;
+
+  /**
+   * Deletes all values from the secure cache.
+   *
+   * If there are no values stored, this will resolve successfully without
+   * doing anything.
+   */
+  clear(): Promise<void>;
 }
 ```
 
-**browser.secureCache.store**
+Example usage:
 
-This stores the provided bytes in the most durable storage location currently available based on the underlying platform and/or browser preferences.
+```ts
+const keyMaterial = crypto.getRandomValues(new Uint8Array(32));
+const encoded = Uint8Array.from(keyMaterial).toBase64();
 
-```
-browser.secureCache.store({
-  id: "example-data"
-  uvRequired: false,
-  timeout: Temporal.Duration.from({ days: 14 }),
-  data: new Uint8Array(16)
+await browser.secureCache.set("userkey", encoded, {
+  uvRequired: true,
+  // the secret should be automatically cleared
+  expiry: Temporal.Duration.from({ days: 14 }),
 });
+
+// This will await until the user is verified by the platform
+const userKey = await browser.secureCache.get("userkey");
+
+// Imported for use in a WebCrypto operation
+const userCryptoKey = await crypto.subtle.importKey(
+  "raw",
+  Uint8Array.fromBase64(userKey),
+  "AES-GCM",
+  false,
+  ["encrypt", "decrypt"]
+);
+
+// etc...
 ```
 
-The `uvRequired` boolean is optional. If omitted, the secret is available without the need for any of the recognised auth methods but is still stored in a secure location. If the parameter is set to `true` but the current platform can't support the requirement, an exception is thrown. Inversely, if the platform
-can only interact with secure hardware after performing UV and the parameter is set to `false`, an exception is also thrown.
+#### browser.secureCache.getInfo
 
-The `timeout` [Duration](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration) is optional. If omitted, the secret will remain available as long as the underlying implementation can uphold. Browser extensions that wish to, for example, force stronger re-authentication periodically may utilize this. If the same secret id is stored again with a timeout, this should replace any previously set duration to "reset" the expiry countdown.
+Enables an extension to determine what capabilities the current platform
+implementation its running on provides.
 
-The `data` parameter is a byte buffer/array containing the data the caller wants the platform to persist. If `data` is larger then 1KB, an error will be thrown. Large amounts of data should not be stored with this API, as it may encounter platform-specific slowdowns or limitations (ie `mlock` limits). In order to improve cross-platform compatibility, a lower bound is enforced by the browser.
+This may be important to extensions that need to rely on the availability of user verification (`uvAvailable`), or stored values being persisted (`persistentStorage`).
 
-**browser.secureCache.retrieve**
+#### browser.secureCache.set
 
-This retrieves the stored data. If user verification was originally set to required when persisting the data, the browser will only provide it if the user successfully verifies themself through a strong implementation-specific authentication ceremomy.
+Stores the provided string `value` in the most durable storage location currently available based on the underlying platform and/or browser preferences.
 
-If the `timeout` parameter was originally set and represented a period of time shorter than the platform holds the secret otherwise, the browser agent will invalidate the secret at the time this method is is called by the owning extension and notify the extension of such expiry through an error. Callers must handle the possibility of calls taking arbitrarily long as a user may not interact with the prompt right away.
+If `value` is larger then 1KB, an error may be thrown. Large amounts of data should not be stored with this API, as it may encounter platform-specific slowdowns or limitations (ie `mlock` limits). In order to improve cross-platform compatibility, a lower bound may enforced by the browser.
+
+If `set()` is called with the same `id` all `options` are replaced with the latest call.
+
+Additional options:
+
+- `uvRequired` boolean (optional, defaults `false`): when omitted, the value can be retrieved without any user verification prompt. When set to `true` the browser must first perform user verification. If user verification fails, or is not available, the API throws an `Error`.
+
+- `expiry` [Duration](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration) (optional): when omitted, the secret will remain available as long as the underlying implementation can uphold. Calling `set()` with the same `id` will overwrite the `expiry` even if left undefined (no expiry).
+
+#### browser.secureCache.getIds
+
+Returns an array of all stored IDs. Any ID where the value has expired is omitted from the array.
+
+#### browser.secureCache.get
+
+Retrieves the stored value, if available. Otherwise returns `undefined` on no value, or throws error on failure.
+
+If `uvRequired` was set to `true` on the most recent `set(id)` call, the browser will only provide it if the user successfully verifies themself through a strong implementation-specific authentication ceremomy. If user verification fails an error is thrown. User verification can take time, and so callers should expect and handle a returned Promise taking a while to settle.
 
 If the the user verification prompt or method presented by the platform is cancelled, the call will throw an error informing the caller of such. The extension may retry the retrieval as soon as it needs to.
 
-```
-await browser.secureCache.retrieve({ id: "example-data" });
-```
+If `expiry` was set on the most recent `set(id)` call and the duration has elapsed, the call returns `undefined` (i.e. no value).
 
-**browser.secureCache.remove**
+The browser agent may invalidate and remove the secret at the following points:
+
+- when this method is is called by the owning extension
+- at the point of scheduled expiry
+- due to durability limitations
+
+#### browser.secureCache.remove
 
 Removes an entry from the secre cache given an ID. No user verification is required regardless of the secret's original configuration.
 
-```
-browser.secureCache.remove({ id: "example-data" });
-```
+#### browser.secureCache.clear
+
+Deletes all values from secure cache.
+
+If there are no values stored, this will resolve successfully without doing anything.
+
+### New Permissions
+
+The `secureCache` API uses the existing "storage" permission, as the sematic meaning to an end-user is the same, whereas the API difference is a technical one.
+
+Introducing a new permission scope (e.g. "secureCache") was considered, but was discarded to avoid confusing users about the difference which is largely technical.
+
+### Manifest File Changes
+
+No new manifest fields are required for this API.
+
+## Security and Privacy
+
+### Exposed Sensitive Data
+
+The API does not expose any new sensitive data or personally-identifiable information to the extension, that wasn't already previously known since this is a storage API. The API does not allow for cross-extension storage.
+
+### Abuse Mitigations
+
+As with standard storage APIs, there could be a limit imposed by browsers on the maximum amount of data that can be stored on a per-ID basis (see [#browser.secureCache.set]), and/or a maximum total storage limit for the API.
+
+### Additional Security Considerations
+
+This API is designed to enable extensions to store the most sensitive information they may handle, such as encryption keys. As such, it is critical that browser implementations handle this data with the utmost care, and the best guarantees available. Browsers should not implement this API if they cannot provide strong guarantees around the security of the stored data, and the user verification process (e.g. where platform/hardware-backed options are not available).
+
+## Alternatives
+
+### Open Web API
+
+This API could belong on the open web. However, the most common use cases in practice today are for applications that need to store an encryption key.
+
+Since these keys are particularly sensitive, application developers are likely to continue using an extension-based approach to minise the exposure of these keys to more hostile environments.
+
+Practically, a Web Extension API is the highest leverage point to introduce such an API.
 
 ## FAQ
 
