@@ -41,19 +41,19 @@ We intend to position the Secure Cache API as the recommended solution for all e
 In the expected use cases, there are not any downsides to using the API for all secrets management as a replacement to existing APIs like `storage.session`. Developers offload a large burden of tracking platform-specific security concerns and end users benefit from improvements during their regular browser updates. For example, this widely applicable pattern could be encouraged:
 
 ```js
-function storeSecret(id, value, mustPersist) {
+async function storeSecret(id, value, mustPersist) {
   const storageIsPersisted =
-    browser.secureCache?.getInfo().persistedStorage === true;
+    (await browser.secureCache?.getInfo().persistentStorage) === true;
 
   if (mustPersist && !storageIsPersisted) {
     throw new Error("Persistent storage not available");
   }
 
   if (browser.secureCache) {
-    browser.secureCache.set(id, value);
+    await browser.secureCache.set(id, value);
   } else {
     // Old browser version
-    storage.session.set(value);
+    await storage.session.set(value);
   }
 }
 ```
