@@ -219,7 +219,7 @@ If `set()` is called with the same `id` all `options` are replaced with the late
 
 Additional options:
 
-- `uvRequired` boolean (optional, defaults `false`): when omitted, the value can be retrieved without any user verification prompt. When set to `true` the browser must first perform user verification. If user verification fails, or is not available, the API throws an `Error`.
+- `uvRequired` boolean (optional, defaults `false`): when omitted, the value can be retrieved without any user verification prompt. When set to `true` the browser must first perform user verification. If user verification fails, or is not available, the API throws an `Error`. This value does not cause user verification to be triggered when setting the value.
 
 - `expiry` [Duration](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal/Duration) (optional): when omitted, the secret will remain available as long as the underlying implementation can uphold. Calling `set()` with the same `id` will overwrite the `expiry` even if left undefined (no expiry).
 
@@ -239,8 +239,8 @@ If `expiry` was set on the most recent `set(id)` call and the duration has elaps
 
 The browser agent may invalidate and remove the secret at the following points:
 
-- when this method is is called by the owning extension
-- at the point of scheduled expiry
+- when get() is called and the value has expired
+- at the point the value is due to expire
 - due to durability limitations
 
 #### browser.secureCache.remove
