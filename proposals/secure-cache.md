@@ -58,7 +58,7 @@ function storeSecret(id, value, mustPersist) {
 }
 ```
 
-When persistence is required but not available, web extension applications can fall back to the existing mechanisms that they use today for the long-standing limitation. Otherwise, the best location is selected automatically.
+When persistence is required but not available, web extensions can fall back to the existing mechanisms that they use today for the long-standing limitation. Otherwise, the best location is selected automatically.
 
 ### Threat Model
 
@@ -287,7 +287,7 @@ Practically, a Web Extension API is the highest leverage point to introduce such
 
 ## FAQ
 
-**Are there any extensions that would use this?**
+### Are there any extensions that would use this?
 
 This proposal is drafted by the team at 1Password. Its [extension](https://chrome.google.com/webstore/detail/1password-%E2%80%93-password-mana/aeblfdkhhhdcdjpifhhbdiojplfjncoa?hl=en) is available for Chrome, Firefox, Safari, and Edge and has more than 2M weekly active users in the Chrome Web Store alone. They would be quick to implement this in conjunction with or in place of our current Native Messaging solution. Additionally, it may provide a better durable store for client-side secrets such as the Secret Key across 1Password's web apps.
 
@@ -297,31 +297,101 @@ The Keeper Security [browser extension](https://chrome.google.com/webstore/detai
 
 The [MetaMask](https://metamask.io/) browser extension, a cryptocurrency wallet and a gateway to blockchain applications with over 30 million monthly active users, would also greatly benefit from using this API as a more secure way to store a user's private keys while their wallet is locked. They would also be interested in offering users the choice to use biometrics as a simpler way to unlock their wallet.
 
+The [Aglide](https://aglide.com/) browser extension, used for handling credentials, encryption keys, and web sessions, would immediately use this API to enable new product architectures that no longer rely on a desktop application being installed.
+
 We expect that the API would benefit a wide range of extensions, providing value far beyond credential management. If you'd like to add your extension or use case, feel free to open a PR.
 
-**Could a web API like WebAuthn cater for this use case?**
+### Why not use a Web API?
 
-There’s a lot of existing work here, including [feature requests](https://bugs.webkit.org/show_bug.cgi?id=217929) opened by this proposal's champions in the past.
+There have been proposals in the past which are now stale/abandoned, including:
 
-Some of this work includes a proposal for a “[Web API For Accessing Secure Element](https://globalplatform.github.io/WebApis-for-SE/doc/)”, which seems to have been abandoned, and a proposal for [Hardware Based Secure Service](https://w3c.github.io/websec/hbss.html) features which is [no longer active](https://lists.w3.org/Archives/Public/public-hb-secure-services/2018Mar/0001.html).
+- A [WebKit feature request (October 2020)](https://bugs.webkit.org/show_bug.cgi?id=217929) for the ability to store secrets protected by Face ID and Touch ID.
+- A “[Web API For Accessing Secure Element (Global Platform, September 2016)](https://globalplatform.github.io/WebApis-for-SE/doc/)”, which seems to have been abandoned.
+- A [Hardware Based Secure Service](https://github.com/w3c/websec/blob/gh-pages/hbss.html) proposal, which is [no longer active](https://lists.w3.org/Archives/Public/public-hb-secure-services/2018Mar/0001.html).
 
-The most promising work at the moment is WebAuthn’s new [large blob storage extension](https://www.w3.org/TR/webauthn-2/#sctn-large-blob-extension). The spec also seems to provide few guarantees about how this data should be stored, with implementers saying it is [unsuitable for sensitive data](https://developers.yubico.com/libfido2/Manuals/fido_dev_largeblob_get.html#CAVEATS). However, since it requires a Webauthn authenticator to be present, it wouldn't be available in nearly as many user scenarios. Similar reasoning applies to the [PRF extension](https://github.com/w3c/webauthn/issues/1462).
+We believe that introducing this capability as a Web Extension API is the most pragmatic approach as it would be adopted nearly immediately by numerous extensions as a direct alternative to improve the product experience and reduce complexity for their users.
 
-**What’s the plan for durability on Linux?**
+Additionally, the Web Extension API surface is more appropriate for the use cases of securely storing sensitive data such as encryption keys. Extensions are much easier to secure, and remain a reasonably low barrier to entry to users of these types of applications.
 
-Linux is one of the platforms where this API would be most beneficial, so we’d love to support it. However, it’s less clear which API would be appropriate here. APIs such as the [FreeDesktop Secure Storage API](https://www.gnu.org/software/emacs/manual/html_node/auth/Secret-Service-API.html) exist, but not all of the available APIs are guaranteed to be hardware backed, restricted by user verification, and other options have different limitations. Feedback is welcome on what options may be suitable to increase usability on Linux.
+Application developers would probably choose to use an extension-based approach event if these capabilities were available on the web, to minimise the exposure of these keys to more hostile environments.
 
-**Why is it useful to allow storing secrets without biometric authentication?**
+### Why not use WebAuthn?
 
-Millions of users use devices without the hardware for biometric authentication, but install extensions which would be likely to implement this API. Ensuring the API is still available would allow exension authors to implement things like PIN code unlock more securely or generally raise their application security bar. This wouldn’t be quite as secure as a biometric approach, but on other platforms 1Password has found that this fits within their threat model and drastically improves user experience with very little effort.
+Whilst WebAuthn with the addition of the PRF extension does provide a faster mechanism for authenticating a user and retrieving a secret, than passwords, and support for PRF is improving (see [WebAuthn PRF Support by Corbado]). It is insufficient for two reasons:
 
-**Are there any alternatives? How do vendors like 1Password implement biometrics today?**
+[WebAuthn PRF Support by Corbado]: https://www.corbado.com/blog/passkeys-prf-webauthn
+
+1.  It relies on a more complicated user flow with no control over user verification. Passkeys trigger the browser, or operating system, to request the user verifies themselves. The application developer has no ability to avoid user verification where it is not necessary (e.g. for less sensitive data, or background tasks).
+
+2.  In some use cases, application developers generate client-specific keys that are then used during a pairing process to become 'trusted'. From that point on, the key can be used as a form of encryption and authentication deliberately to avoid other forms of user authentication.
+
+    For example, a product that relies on the OIDC/SAML protocol for authentication requires the user has a 'trusted device' (with a unique durable encryption key). For this model to work, there must be:
+
+    (a) strong guarantees that the key material that the 'trusted client' is storing is not accessible to other applications (as such, standard web storage APIs are not suitable for this use case since they are not encrypted at rest), and
+
+    (b) no dependence on deriving a key from other material provided by the user, since they can only provide an assertion which is unsuitable for key derivation.
+
+    In these systems, after the user has completed SAML authentication, and the assertion has been verified, the client-unique encryption key can be used to decrypt the end-to-end encrypted data.
+
+Additionally, it is worth noting that certain enterprises ban the use of passkeys as an authentication method.
+
+### Could Device-Bound Session Credentials (DBSC) be used?
+
+Device Bound Session Credentials (DBSC) ([DBSC Draft]; [DBSC, Google]) is a proposed API that would allow the browser to handle secure storage and refreshing of cookies on behalf of websites.
+
+Unfortunately, DBSC is not a suitable alternative as it does not expose the primitives necessary for application developers to implement the use cases outlined in this proposal, specifically the combination of authentication and encryption at the application layer.
+
+[DBSC Draft]: https://w3c.github.io/webappsec-dbsc/
+[DBSC, Google]: https://developer.chrome.com/docs/web-platform/device-bound-session-credentials
+
+### What’s the plan for durability on Linux?
+
+Linux is one of the platforms where this API would be most beneficial. However, it’s less clear which API would be appropriate here. APIs such as the [FreeDesktop Secure Storage API] exist, but not all of the available APIs are guaranteed to be hardware backed, restricted by user verification, and other options have different limitations. Feedback is welcome on what options may be suitable to increase usability on Linux.
+
+As per the specification, browsers should not implement this API on platforms where they cannot provide the security guarantees of the API.
+
+[FreeDesktop Secure Storage API]: https://www.gnu.org/software/emacs/manual/html_node/auth/Secret-Service-API.html
+
+### Why is it useful to allow storing secrets without biometric authentication?
+
+Millions of users use devices without the hardware for biometric authentication, but install extensions which would be likely to implement this API. User verification is not strictly a requirement for all the use cases of securely storing secrets, and that determination falls with the application developer to decide based on their requirements.
+
+### Are there any alternatives? How do vendors like 1Password implement biometrics today?
 
 1Password currently use a solution based on Native Messaging where the extension communicates with a native app. This pattern is also reused by other credential management apps. These app is able to use system APIs to request biometrics and access hardware based storage. This has limitations, however. Not all users have the native application (users of Chromebooks and iOS Safari, to name a few) and implementing reliable cross-process messaging is a challenge compared to simple JavaScript API patterns that don't require bridging processes from different app vendors.
 
-**Could secrets be stored in localStorage, IDB or the new storage.session instead?**
+### Could secrets be stored in localStorage, IndexedDB, or Web Extension Storage instead?
 
-1Password and many others have historically chosen not to do this because it makes the secrets too easy to access. While a compromised machine is hard to protect against, data in these APIs can be trivially accessed with a console command and no authentication and violates a user's expecation of security. This allows an “evil maid” attack if a computer is left unlocked, or for another application to read the secret from disk independently of Chrome. While the secret must be in memory while the extension is in use, extensions like password managers aggressively enter a “locked state” after inactivity where secrets are cleared from memory. This means that after only a short period of idle time such an attack would require biometric authentication.
+Credential managers have historically chosen not to do this because it makes the secrets too easy to access. While a compromised machine is hard to protect against, data in these APIs can be trivially accessed with a terminal and no authentication, or by another application without any user interaction. These other storage mechanisms allow an “evil maid” attack if a computer is left unlocked, or for another application to read the secret from disk independently of the browser.
+
+While the secret must be in memory while the extension is in use, extensions like password managers aggressively enter a “locked state” after inactivity where secrets are cleared from memory. This means that after only a short period of idle time such an attack would require biometric authentication.
+
+`storage.session` does not provide the durability guarantees necessary to be a viable option for securely storing secrets, particularly ones go through a pairing process to be recognised as trusted to avoid further authentication in future.
+
+### Why not use the StorageArea interface for the schema specification?
+
+There are concerns specific to secure storage that are not supported by the more generic `StorageArea` interface, (e.g. user verification).
+
+Additionally, the StorageArea interface carries baggage unnecessary for the bespoke requirements of handling secure materials (e.g. getting/setting multiple keys at once, support for callbacks).
+
+Following the reasons outlined above as to why the StorageArea API is not suitable for this use case, it is also helpful and educational for application developers to see the distinction between the two.
+
+### Why string values instead of bytes?
+
+Application developers on the web are routinely used to working with strings, and existing Web Extension APIs set the precedence for string storage.
+
+Whilst this does mean that application developers will need to encode data when working with the [Web Crypto API], this is standard practice when working with those APIs specifically.
+
+[Web Crypto API]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API
+
+## References
+
+- The issue that initiated this proposal:
+  https://github.com/w3c/webextensions/issues/154
+- Discussion at TPAC November 2025:
+  https://github.com/w3c/webextensions/blob/main/_minutes/2025-11-13-wecg-tpac.md#secure-storage
+- Discussion at WECG Face-to-Face Meeting 7 April 2026:
+  https://github.com/w3c/webextensions/blob/main/_minutes/2026-04-07-london-f2f.md#secure-storage-api
 
 ## Remaining Work
 
