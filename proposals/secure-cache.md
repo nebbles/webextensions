@@ -378,6 +378,10 @@ Additionally, the StorageArea interface carries baggage unnecessary for the besp
 
 Following the reasons outlined above as to why the StorageArea API is not suitable for this use case, it is also helpful and educational for application developers to see the distinction between the two.
 
+### How large could the stored data be?
+
+The expectation is that implementation specific limits would be set. Only a very small allowance per value (e.g. ~5 KB for ML-DSA private key) is needed for the known use cases.
+
 ### Why string values instead of bytes?
 
 Application developers on the web are routinely used to working with strings, and existing Web Extension APIs set the precedence for string storage.
