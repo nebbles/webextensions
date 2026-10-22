@@ -42,8 +42,8 @@ In the expected use cases, there are not any downsides to using the API for all 
 
 ```js
 async function storeSecret(id, value, mustPersist) {
-  const storageIsPersisted =
-    (await browser.secureCache?.getInfo().persistentStorage) === true;
+  const secureCacheInfo = await browser.secureCache?.getInfo();
+  const storageIsPersisted = secureCacheInfo.persistentStorage === true;
 
   if (mustPersist && !storageIsPersisted) {
     throw new Error("Persistent storage not available");
@@ -53,7 +53,7 @@ async function storeSecret(id, value, mustPersist) {
     await browser.secureCache.set(id, value);
   } else {
     // Old browser version
-    await storage.session.set(value);
+    await browser.storage.session.set(id, value);
   }
 }
 ```
@@ -88,7 +88,7 @@ Important: Values may be removed sooner than durabilty allows if an extension us
 
 In the event the OS platform doesn't provide key storage APIs which enable greater security or more durable persistence (such as Linux), a browser may opt to only keep data written through `browser.secureCache` inside of its own process memory (wrapped in any OS-specific guards available) until the browser is closed. The browser will communicate this to extensions via the `persistentStorage: false` property.
 
-For developers who need to rely on more durable secure storage, feature discovery of the `browser.secureCache.getInfo().persistentStorage` property will determine whether they have suitable storage available.
+For developers who need to rely on more durable secure storage, feature discovery of the `(await browser.secureCache.getInfo()).persistentStorage` property will determine whether they have suitable storage available.
 
 This provides several compounding advantages over exclusively using platform storage:
 
@@ -142,9 +142,8 @@ interface SecureCache {
 
   /**
    * Retrieves a value from the secure cache. If the value does not exist, this
-   * will reject with an error.  If `uvRequired` was set when the value was
-   * stored, this will prompt the user for verification before returning the
-   * value.
+   * returns undefined.  If `uvRequired` was set when the value was stored,
+   * this will prompt the user for verification before returning the value.
    *
    * If the value was stored with `uvRequired: true`, user verification will be
    * will be applied, regardless of the `options.uvRequired` value.
@@ -189,6 +188,7 @@ await browser.secureCache.set("userkey", encoded, {
 
 // This will await until the user is verified by the platform
 const userKey = await browser.secureCache.get("userkey");
+if (!userKey) throw new Error("User key missing");
 
 // Imported for use in a WebCrypto operation
 const userCryptoKey = await crypto.subtle.importKey(
