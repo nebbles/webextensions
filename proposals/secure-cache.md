@@ -127,7 +127,10 @@ interface SecureCache {
   set(
     id: string,
     value: string,
-    options?: { uvRequired?: boolean }
+    options?: {
+      uvRequired?: boolean;
+      expiry?: Temporal.Duration;
+    }
   ): Promise<void>;
 
   /**
@@ -152,7 +155,6 @@ interface SecureCache {
     id: string,
     options?: {
       uvRequired?: boolean;
-      expiry?: Temporal.Duration;
     }
   ): Promise<string | undefined>;
 
